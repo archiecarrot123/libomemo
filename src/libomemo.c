@@ -20,6 +20,7 @@
 #define PEP_NODE_NAME "node"
 #define DEVICELIST_PEP_NAME "devicelist"
 #define BUNDLE_PEP_NAME "bundles"
+#define PEP_CURRENT_NAME "current"
 
 #define OMEMO_DEVICELIST_PEP_NODE OMEMO_NS OMEMO_NS_SEPARATOR DEVICELIST_PEP_NAME
 
@@ -55,6 +56,7 @@
 #define SIGNED_PRE_KEY_NODE_ID_ATTR_NAME "signedPreKeyId"
 #define PRE_KEY_NODE_ID_ATTR_NAME "preKeyId"
 #define DEVICE_NODE_ID_ATTR_NAME "id"
+#define ITEM_NODE_ID_ATTR_NAME "id"
 
 #define OMEMO_DB_DEFAULT_FN "omemo.sqlite"
 
@@ -140,8 +142,12 @@ static int expect_next_node(mxml_node_t * node_p, mxml_node_t * (*next_node_func
   }
 
   const char * element_name = mxmlGetElement(next_node_p);
-  if (!element_name) {
-    return OMEMO_ERR_MALFORMED_XML;
+  while (!element_name) {
+    next_node_p = mxmlGetNextSibling(next_node_p);
+    if (!next_node_p) {
+      return OMEMO_ERR_MALFORMED_XML;
+    }
+    element_name = mxmlGetElement(next_node_p);
   }
 
   if (strncmp(mxmlGetElement(next_node_p), expected_name, strlen(expected_name))) {
@@ -149,6 +155,11 @@ static int expect_next_node(mxml_node_t * node_p, mxml_node_t * (*next_node_func
   }
   *next_node_pp = next_node_p;
   return 0;
+}
+
+// little helper; i hate typing
+mxml_node_t * find_child (mxml_node_t * parent, const char * name) {
+  return mxmlFindElement(parent, parent, name, NULL, NULL, MXML_DESCEND_FIRST);
 }
 
 #define log_err(format, ...) \
@@ -542,59 +553,63 @@ int omemo_bundle_import (const char * received_bundle, omemo_bundle ** bundle_pp
   }
   bundle_p->device_id = device_id;
 
-  item_node_p = mxmlFindPath(items_node_p, ITEM_NODE_NAME);
+  item_node_p = find_child(items_node_p, ITEM_NODE_NAME);
   if (!item_node_p) {
     ret_val = OMEMO_ERR_MALFORMED_BUNDLE_NO_ITEM_ELEM;
     goto cleanup;
   }
 
-  bundle_node_p = mxmlFindPath(item_node_p, BUNDLE_NODE_NAME);
+  bundle_node_p = find_child(item_node_p, BUNDLE_NODE_NAME);
   if (!bundle_node_p) {
     ret_val = OMEMO_ERR_MALFORMED_BUNDLE_NO_BUNDLE_ELEM;
     goto cleanup;
   }
 
-  signed_pk_node_p = mxmlFindPath(bundle_node_p, SIGNED_PRE_KEY_NODE_NAME);
+  signed_pk_node_p = find_child(bundle_node_p, SIGNED_PRE_KEY_NODE_NAME);
   if (!signed_pk_node_p) {
     ret_val = OMEMO_ERR_MALFORMED_BUNDLE_NO_SPK_ELEM;
     goto cleanup;
   }
-  signed_pk_node_p = mxmlGetParent(signed_pk_node_p);
   bundle_p->signed_pk_node_p = signed_pk_node_p;
 
-  signature_node_p = mxmlFindPath(bundle_node_p, SIGNATURE_NODE_NAME);
+  signature_node_p = find_child(bundle_node_p, SIGNATURE_NODE_NAME);
   if (!signature_node_p) {
     ret_val = OMEMO_ERR_MALFORMED_BUNDLE_NO_SIG_ELEM;
     goto cleanup;
   }
-  signature_node_p = mxmlGetParent(signature_node_p);
   bundle_p->signature_node_p = signature_node_p;
 
-  identity_key_node_p = mxmlFindPath(bundle_node_p, IDENTITY_KEY_NODE_NAME);
+  identity_key_node_p = find_child(bundle_node_p, IDENTITY_KEY_NODE_NAME);
   if (!identity_key_node_p) {
     ret_val = OMEMO_ERR_MALFORMED_BUNDLE_NO_IK_ELEM;
     goto cleanup;
   }
-  identity_key_node_p = mxmlGetParent(identity_key_node_p);
   bundle_p->identity_key_node_p = identity_key_node_p;
 
-  prekeys_node_p = mxmlFindPath(bundle_node_p, PREKEYS_NODE_NAME);
+  prekeys_node_p = find_child(bundle_node_p, PREKEYS_NODE_NAME);
   if (!prekeys_node_p) {
     ret_val = OMEMO_ERR_MALFORMED_BUNDLE_NO_PREKEYS_ELEM;
     goto cleanup;
   }
   bundle_p->pre_keys_node_p = prekeys_node_p;
 
-  pre_key_node_p = mxmlFindPath(prekeys_node_p, PRE_KEY_NODE_NAME);
+  pre_key_node_p = find_child(prekeys_node_p, PRE_KEY_NODE_NAME);
   if (!pre_key_node_p) {
     ret_val = OMEMO_ERR_MALFORMED_BUNDLE_NO_PREKEY_ELEM;
     goto cleanup;
   }
-  pre_key_node_p = mxmlGetParent(pre_key_node_p);
-  pre_keys_count++;
-  pre_key_node_p = mxmlGetNextSibling(pre_key_node_p);
 
   while (pre_key_node_p) {
+    // delete value nodes
+    while (!mxmlGetElement(pre_key_node_p) && pre_key_node_p) {
+      mxml_node_t * old_node_p = pre_key_node_p;
+      pre_key_node_p = mxmlGetNextSibling(old_node_p);
+      mxmlDelete(old_node_p);
+    }
+    if (!pre_key_node_p) {
+      break;
+    }
+
     pre_keys_count++;
     pre_key_node_p = mxmlGetNextSibling(pre_key_node_p);
   }
@@ -759,10 +774,32 @@ int omemo_devicelist_import(char * received_devicelist, const char * from, omemo
   while (device_node_p) {
     device_count++;
 
+    // skip value nodes
+    while (!mxmlGetElement(device_node_p) && device_node_p) {
+      mxml_node_t * old_node_p = device_node_p;
+      device_node_p = mxmlGetNextSibling(old_node_p);
+      mxmlDelete(old_node_p);
+    }
+    if (!device_node_p) {
+      break;
+    }
+
     const char * id_string = mxmlElementGetAttr(device_node_p, DEVICE_NODE_ID_ATTR_NAME);
     if (!id_string) {
       log_err("device element #%zu does not have an ID attribute", device_count);
       ret_val = OMEMO_ERR_MALFORMED_DEVICELIST_NO_DEVICE_ID_ATTR;
+      goto cleanup;
+    }
+
+    long id_temp = strtol(id_string, (void *) 0, 0);
+    if (id_temp == -1) {
+      mxml_node_t * old_node_p = device_node_p;
+      device_node_p = mxmlGetNextSibling(old_node_p);
+      mxmlDelete(old_node_p);
+      continue;
+    }
+    if (id_temp < 0 || id_temp > UINT32_MAX) {
+      ret_val = OMEMO_ERR_MALFORMED_DEVICELIST_INVALID_DEVICE_ID;
       goto cleanup;
     }
 
@@ -772,7 +809,7 @@ int omemo_devicelist_import(char * received_devicelist, const char * from, omemo
       goto cleanup;
     }
 
-    *id_temp_p = strtol(id_string, (void *) 0, 0);
+    *id_temp_p = id_temp;
     id_list_p = g_list_append(id_list_p, id_temp_p);
 
     device_node_p = mxmlGetNextSibling(device_node_p);
@@ -930,6 +967,7 @@ int omemo_devicelist_export(omemo_devicelist * dl_p, char ** xml_p) {
   mxmlElementSetAttr(publish_node_p, PUBLISH_NODE_NODE_ATTR_NAME, OMEMO_DEVICELIST_PEP_NODE);
 
   mxml_node_t * item_node_p = mxmlNewElement(publish_node_p, ITEM_NODE_NAME);
+  mxmlElementSetAttr(item_node_p, ITEM_NODE_ID_ATTR_NAME, PEP_CURRENT_NAME);
   mxmlAdd(item_node_p, MXML_ADD_AFTER, NULL, dl_p->list_node_p);
 
   mxml_options_t * options = mxmlOptionsNew();
@@ -1446,7 +1484,7 @@ static int omemo_message_find_key_element(omemo_message * msg_p, uint32_t rid, m
     }
   }
 
-  
+
 cleanup:
   free(rid_string);
 
@@ -1482,7 +1520,7 @@ int omemo_message_get_encrypted_key(omemo_message * msg_p, uint32_t own_device_i
 cleanup:
   *key_pp = key_p;
   *key_len_p = key_len;
-  
+
   return ret_val;
 }
 
