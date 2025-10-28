@@ -162,6 +162,14 @@ mxml_node_t * find_child (mxml_node_t * parent, const char * name) {
   return mxmlFindElement(parent, parent, name, NULL, NULL, MXML_DESCEND_FIRST);
 }
 
+// entity callback for apos
+int entity_cb(void * cbdata, const char * name) {
+  if (!strcmp(name, "apos")) {
+    return '\'';
+  }
+  return -1;
+}
+
 #define log_err(format, ...) \
   do { \
     if (getenv("LIBOMEMO_DEBUG")) { \
@@ -1150,6 +1158,7 @@ int omemo_message_prepare_encryption(char * outgoing_message, uint32_t sender_de
 
   options = mxmlOptionsNew();
   mxmlOptionsSetTypeValue(options, MXML_TYPE_OPAQUE);
+  mxmlOptionsSetEntityCallback(options, entity_cb, NULL);
   msg_node_p = mxmlLoadString((void *) 0, options, outgoing_message);
   mxmlOptionsDelete(options);
   if (!msg_node_p) {
